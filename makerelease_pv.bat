@@ -16,9 +16,9 @@ rename AltSnap%VERSION%-inst.exe AltSnap%VERSION%-x64-inst.exe
 call ziprelease_pv.bat
 rename AltSnap_bin.zip AltSnap%version%bin_x64.zip
 
-make clean
-make
-call nsi.bat
+:: make clean
+:: make
+:: call nsi.bat
 
 :: rhash --sha256 AltSnap%VERSION%-x64-inst.exe > SHA256.TXT
 :: rhash --sha256 AltSnap%VERSION%-inst.exe >> SHA256.TXT
