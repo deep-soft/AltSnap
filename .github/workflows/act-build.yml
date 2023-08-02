@@ -34,6 +34,7 @@ jobs:
     runs-on: windows-latest
 
     strategy:
+      fail-fast: false
       matrix:
         include:
           - { sys: mingw64, env: x86_64, exe: rufus.exe }
@@ -74,7 +75,7 @@ jobs:
     - name: Build
       shell: cmd
       run: |
-        call makerelease.bat
+        call makerelease_pv.bat
 
     - name: Display SHA-256
       shell: cmd
