@@ -63,12 +63,13 @@ jobs:
         submodules: recursive
 
     - name: set program version
+      shell: bash
       run: |
-        echo 'PROGRAM_VERSION=$(grep APP_VERSION resource.h | awk "{print $3}")' >> $GITHUB_ENV
+        echo "VERSION=$(grep APP_VERSION resource.h | awk '{print $3}' | tr -d '"')" >> $GITHUB_ENV
 
     - name: view program version
       run: |
-        echo ${{ env.PROGRAM_VERSION }}
+        echo ${{ env.VERSION }}
 
     - name: Build
       shell: cmd
@@ -85,7 +86,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         # name: AltSnap
-        name: ${{ env.PRG_NAME}}-${{ matrix.sys}}
+        name: ${{ env.PRG_NAME}}-${{ env.VERSION }}-${{ matrix.sys}}
         path: |
           *.zip
           SHA256.TXT
