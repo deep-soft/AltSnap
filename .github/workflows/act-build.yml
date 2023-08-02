@@ -62,7 +62,6 @@ jobs:
         fetch-depth: 0
         submodules: recursive
 
-
     - name: set program version
       run: |
         echo 'PROGRAM_VERSION=$(grep APP_VERSION resource.h | awk "{print $3}")' >> $GITHUB_ENV
@@ -72,10 +71,12 @@ jobs:
         echo ${{ env.PROGRAM_VERSION }}
 
     - name: Build
+      shell: cmd
       run: |
         call makerelease.bat
 
     - name: Display SHA-256
+      shell: cmd
       run: |
         type SHA256.TXT
 
