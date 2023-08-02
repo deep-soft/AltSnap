@@ -1,0 +1,90 @@
+name: act - build AltSnap
+
+on: 
+#  push:
+#    paths-ignore:
+#      - '.gitignore'
+#      - '.gitattributes'
+#      - 'res/**'
+#      - '**.cmd'
+#      - '**.md'
+#      - '**.rc'
+#      - '**.sh'
+#      - '**.txt'
+#      - '**.xml'
+#  pull_request:
+#    branches: [master]
+#    paths-ignore:
+#      - '.gitignore'
+#      - '.gitattributes'
+#      - 'res/**'
+#      - '**.cmd'
+#      - '**.md'
+#      - '**.rc'
+#      - '**.sh'
+#      - '**.txt'
+#      - '**.xml'
+  workflow_dispatch:
+
+env:
+  PRG_NAME: AltSnap
+
+jobs:
+  MinGW-Build:
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        include:
+          - { sys: mingw64, env: x86_64, exe: rufus.exe }
+          - { sys: mingw32, env: i686, exe: rufus_x86.exe }
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+    - name: Install MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: ${{ matrix.sys }}
+        update: true
+        install: >-
+          mingw-w64-${{ matrix.env }}-toolchain
+          base-devel
+          autotools
+          git
+          upx
+
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+        submodules: recursive
+
+
+    - name: set program version
+      run: |
+        echo 'PROGRAM_VERSION=$(grep APP_VERSION resource.h | awk "{print $3}")' >> $GITHUB_ENV
+
+    - name: view program version
+      run: |
+        echo ${{ env.PROGRAM_VERSION }}
+
+    - name: Build
+      run: |
+        call makerelease.bat
+
+    - name: Display SHA-256
+      run: |
+        type SHA256.TXT
+
+    - name: Upload artifacts
+      # if: ${{ github.event_name == 'push' }}
+      uses: actions/upload-artifact@v3
+      with:
+        # name: AltSnap
+        name: ${{ env.PRG_NAME}}-${{ matrix.sys}}
+        path: |
+          *.zip
+          SHA256.TXT
