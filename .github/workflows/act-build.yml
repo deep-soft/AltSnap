@@ -37,8 +37,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { sys: mingw64, env: x86_64, exe: rufus.exe }
-          - { sys: mingw32, env: i686, exe: rufus_x86.exe }
+          - { sys: mingw64, env: x86_64, exe: AltSnap.exe }
+        #  - { sys: mingw32, env: i686, exe: rufus_x86.exe }
 
     defaults:
       run:
