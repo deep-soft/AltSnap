@@ -26,8 +26,8 @@ rename AltSnap_bin.zip AltSnap%version%bin_x64.zip
 :: need nsi installed
 :: rhash --sha256 AltSnap%VERSION%-x64-inst.exe > SHA256.TXT
 :: rhash --sha256 AltSnap%VERSION%-inst.exe >> SHA256.TXT
-:: sha256sum AltSnap%VERSION%-x64-inst.exe > SHA256.TXT
-:: sha256sum AltSnap%VERSION%-inst.exe >> SHA256.TXT
+sha256sum AltSnap%VERSION%-x64-inst.exe > SHA256.TXT
+sha256sum AltSnap%VERSION%-inst.exe >> SHA256.TXT
 
 call zzip_pv.bat
 rename AltSnap_src.zip AltSnap%version%src.zip
