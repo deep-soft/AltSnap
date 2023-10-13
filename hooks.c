@@ -7,7 +7,6 @@
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #include "hooks.h"
-#define COBJMACROS
 static void MoveWindowAsync(HWND hwnd, int x, int y, int w, int h);
 static BOOL CALLBACK EnumMonitorsProc(HMONITOR, HDC, LPRECT , LPARAM );
 static LRESULT CALLBACK MenuWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -228,6 +227,7 @@ static struct config {
     UCHAR keepMousehook;
     UCHAR EndSendKey; // Used to be VK_CONTROL
     WORD AeroMaxSpeed;
+    WORD LongClickMoveDelay;
     DWORD BLCapButtons;
     DWORD BLUpperBorder;
     int PinColor;
@@ -922,9 +922,14 @@ static void Enum()
 }
 ///////////////////////////////////////////////////////////////////////////
 //
+#define RECALC_INVISIBLE_BORDERS ((RECT **)1)
 static void EnumOnce(RECT **bd)
 {
     static RECT borders;
+    if (bd == RECALC_INVISIBLE_BORDERS) {
+        FixDWMRect(state.hwnd, &borders);
+        return;
+    }
     if (bd && !(state.enumed&1)) {
         // LOGA("Enum");
         Enum(); // Enumerate monitors and windows
@@ -1208,14 +1213,41 @@ static void MaximizeRestore_atpt(HWND hwnd, UINT sw_cmd, int origin)
                       , mi.rcMonitor.bottom-mi.rcMonitor.top);
     }
 }
+
+static void MoveWindowAsync1(HWND hwnd, int x, int y, int w, int h)
+{
+    UINT flags = SWP_NOACTIVATE|SWP_NOOWNERZORDER|SWP_NOZORDER|SWP_ASYNCWINDOWPOS;
+    if (conf.IgnoreMinMaxInfo) flags |= SWP_NOSENDCHANGING;
+    SetWindowPos(hwnd, NULL, x, y, w, h, flags);
+}
 static void RestoreWindowToRect(HWND hwnd, const RECT *rc, UINT flags)
 {
+    RECT zbd, bd;
+    FixDWMRect(hwnd, &zbd); // Zoomed invisible borders (that were applied)
     WINDOWPLACEMENT wndpl; wndpl.length = sizeof(WINDOWPLACEMENT);
     GetWindowPlacement(hwnd, &wndpl);
     wndpl.showCmd = SW_RESTORE;
     wndpl.flags |= flags;
     CopyRect(&wndpl.rcNormalPosition, rc);
-    SetWindowPlacement(hwnd, &wndpl);
+    if (LOBYTE(GetVersion()) >= 10) {
+        // On Windows 10+ we got invisible borders...
+        wndpl.flags &= ~WPF_ASYNCWINDOWPLACEMENT;
+        // Synchronus restore because we have to check for Invisible
+        // borders again that are different when Zoomed/restored.
+        SetWindowPlacement(hwnd, &wndpl);
+        FixDWMRect(hwnd, &bd); // Restored invisible borders
+        if( !EqualRect(&zbd, &bd) ) {
+            // Wrong invisible borders were applied,
+            // correct it with an async move.
+            #define r wndpl.rcNormalPosition
+            DeflateRectBorder(&r, &zbd);
+            InflateRectBorder(&r, &bd);
+            MoveWindowAsync1(hwnd, r.left, r.top, r.right-r.left, r.bottom-r.top);
+            #undef r
+        }
+    } else {
+        SetWindowPlacement(hwnd, &wndpl);
+    }
 }
 static void RestoreWindowTo(HWND hwnd, int x, int y, int w, int h)
 {
@@ -1232,9 +1264,7 @@ static void MoveWindowAsync(HWND hwnd, int x, int y, int w, int h)
         RECT rc = {x, y, x+w, y+h };
         RestoreWindowToRect(hwnd, &rc, WPF_ASYNCWINDOWPLACEMENT);
     } else {
-        UINT flags = SWP_NOACTIVATE|SWP_NOOWNERZORDER|SWP_NOZORDER|SWP_ASYNCWINDOWPOS;
-        if (conf.IgnoreMinMaxInfo) flags |= SWP_NOSENDCHANGING;
-        SetWindowPos(hwnd, NULL, x, y, w, h, flags);
+        MoveWindowAsync1(hwnd, x, y, w, h);
     }
 }
 
@@ -1567,6 +1597,7 @@ static int AeroMoveSnap(POINT pt, int *posx, int *posy, int *wndwidth, int *wndh
             if (IsZoomed(state.hwnd)) {
                 // Avoids flickering
                 RestoreWindowTo(state.hwnd, *posx, *posy, *wndwidth, *wndheight);
+                EnumOnce(RECALC_INVISIBLE_BORDERS);
             }
             int mmthreadend = !LastWin.hwnd;
             LastWin.hwnd = state.hwnd;
@@ -2026,9 +2057,9 @@ static void MouseMove(POINT pt)
         wndheight = wnd.bottom-wnd.top;
 
         // Check if the window will snap anywhere
-        MoveSnap(&posx, &posy, wndwidth, wndheight, conf.SnapThreshold);
         int ret = AeroMoveSnap(pt, &posx, &posy, &wndwidth, &wndheight);
         if (ret == 1) { state.moving = 1; return; }
+        MoveSnap(&posx, &posy, wndwidth, wndheight, conf.SnapThreshold);
         MoveSnapToZone(pt, &posx, &posy, &wndwidth, &wndheight);
 
         // Restore window if maximized when starting
@@ -2050,12 +2081,16 @@ static void MouseMove(POINT pt)
             // Update wndwidth and wndheight
             wndwidth  = wndpl.rcNormalPosition.right - wndpl.rcNormalPosition.left;
             wndheight = wndpl.rcNormalPosition.bottom - wndpl.rcNormalPosition.top;
-            if (!conf.FullWin) {
+            if( !conf.FullWin && LOBYTE(GetVersion()) < 10 )
                 wndpl.flags |= WPF_ASYNCWINDOWPLACEMENT;
-                SetWindowPlacement(state.hwnd, &wndpl);
-            } else {
-                LastWin.end=1;
-            }
+            SetWindowPlacement(state.hwnd, &wndpl);
+            EnumOnce(RECALC_INVISIBLE_BORDERS);
+//            if (!conf.FullWin) {
+//                wndpl.flags |= WPF_ASYNCWINDOWPLACEMENT;
+//                SetWindowPlacement(state.hwnd, &wndpl);
+//            } else {
+//                LastWin.end=1;
+//            }
         }
 
     } else if (state.action == AC_RESIZE) {
@@ -3413,7 +3448,7 @@ static void SnapToCorner(HWND hwnd, struct resizeXY resize, UCHAR flags)
 {
     // When trying to Snap or extend a non-resizeable window
     if (!(flags&SNTO_MOVETO) && !IsResizable(hwnd))
-        flags = SNTO_MOVETO | (flags&SNTO_NEXTBD); // Move instead
+        flags = SNTO_MOVETO | SNTO_NEXTBD; // Move to next bd instead
 
     SetOriginFromRestoreData(hwnd, AC_MOVE);
     GetMinMaxInfo(hwnd, &state.mmi.Min, &state.mmi.Max); // for CLAMPH/W functions
@@ -4291,6 +4326,94 @@ static void ActionMenu(HWND hwnd)
        | (state.alt <= BT_MB5) << 6                         // LP_NOALTACTION
     );
 }
+// Finds the window that is just next the specified one.
+// Works better if they are arranged like in snap layouts.
+struct FindTiledWindow_struct {
+    POINT opt; // in
+    long owidth;
+    long oheight;
+    HWND ihwnd; // in
+    HWND ohwnd; // out
+    POINT distance; // internal
+    unsigned char direction; // in
+};
+static BOOL CALLBACK FindTiledWindowEnumProc(HWND hwnd, LPARAM lp)
+{
+    struct FindTiledWindow_struct *tw = (struct FindTiledWindow_struct *)lp;
+    RECT rc;
+    if (tw->ihwnd == hwnd || !IsAltTabAble(hwnd) || !GetWindowRect(hwnd, &rc))
+        return TRUE; // Next hwnd
+    POINT pt;
+    pt.x = (rc.left + rc.right) / 2;
+    pt.y = (rc.top + rc.bottom) / 2;
+    long dx = pt.x - tw->opt.x;
+    long dy = pt.y - tw->opt.y;
+    long adx = abs(dx);
+    long ady = abs(dy);
+//    LOGA("adx = %d, ady = %d, tw->oheight = %d, tw->owidth = %d", adx, ady, tw->oheight, tw->owidth);
+
+    // We only use the position of the center of each window.
+    // We check windows within a cone around the direction of choice.
+    // Also we use dimentions of the original window as extra radius for the cone.
+    switch (tw->direction) {
+    case 0: // LEFT
+        if (dx < 0 && ady <= adx + tw->oheight
+        && (adx < tw->distance.x || (adx == tw->distance.x && ady < tw->distance.y)) )
+            break; // Window is closer...
+        return TRUE; // skip
+    case 1: // UP
+        if (dy < 0 && adx <= ady + tw->owidth
+        && (ady < tw->distance.y || (ady == tw->distance.y && adx < tw->distance.x)) )
+            break;
+        return TRUE;
+    case 2: // RIGHT
+        if (dx > 0 && ady <= adx + tw->oheight
+        && (adx < tw->distance.x || (adx == tw->distance.x && ady < tw->distance.y)) )
+            break;
+        return TRUE;
+    case 3: // DOWN
+        if (dy > 0 && adx <= ady + tw->owidth
+        && (ady < tw->distance.y || (ady == tw->distance.y && adx < tw->distance.x)) )
+            break;
+        return TRUE;
+    default: // WTF?
+        return TRUE;
+    }
+    // Update tw struct if we find a closer window.
+    tw->distance.x = adx;
+    tw->distance.y = ady;
+    tw->ohwnd = hwnd;
+
+    return TRUE;
+}
+static HWND FindTiledWindow(HWND hwnd, unsigned char direction)
+{
+    assert(direction < 4 );
+
+    RECT rc;
+    if (GetWindowRect(hwnd, &rc)) {
+        struct FindTiledWindow_struct tw;
+        tw.opt.x = (rc.left + rc.right) / 2;
+        tw.opt.y = (rc.top + rc.bottom) / 2;
+        tw.owidth  = (rc.right - rc.left) / 2;
+        tw.oheight = (rc.bottom - rc.top )/ 2;
+        tw.ihwnd = hwnd;
+        tw.ohwnd = NULL;
+        tw.distance.x = 0x7ffffff0;
+        tw.distance.y = 0x7ffffff0;
+        tw.direction = direction;
+
+        EnumDesktopWindows(NULL, FindTiledWindowEnumProc, (LPARAM)&tw);
+//        // TODO: Handle MDI clients.
+//        if (state.mdiclient) {
+//            EnumChildWindows(state.mdiclient, FindTiledWindowEnumProc, (LPARAM)&tw);
+//        } else {
+//            EnumDesktopWindows(NULL, FindTiledWindowEnumProc, (LPARAM)&tw);
+//        }
+        return tw.ohwnd;
+    }
+    return NULL;
+}
 /////////////////////////////////////////////////////////////////////////////
 // Single click commands
 static void SClickActions(HWND hwnd, enum action action)
@@ -4359,6 +4482,11 @@ static void SClickActions(HWND hwnd, enum action action)
     case AC_SSTEPT:      StepWindow(hwnd, -conf.KBMoveSStep, 1); break;
     case AC_SSTEPR:      StepWindow(hwnd, +conf.KBMoveSStep, 0); break;
     case AC_SSTEPB:      StepWindow(hwnd, +conf.KBMoveSStep, 1); break;
+    case AC_FOCUSL:      ReallySetForegroundWindow(FindTiledWindow(hwnd, 0)); break;
+    case AC_FOCUST:      ReallySetForegroundWindow(FindTiledWindow(hwnd, 1)); break;
+    case AC_FOCUSR:      ReallySetForegroundWindow(FindTiledWindow(hwnd, 2)); break;
+    case AC_FOCUSB:      ReallySetForegroundWindow(FindTiledWindow(hwnd, 3)); break;
+
     case AC_ASONOFF:     ActionASOnOff(); break;
     case AC_MOVEONOFF:   ActionMoveOnOff(hwnd); break;
     default:;
@@ -4948,7 +5076,7 @@ LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam)
         if (wParam == WM_LBUTTONDOWN) {
             state.clickpt = pt;
             // Start Grab timer
-            SetTimer(g_timerhwnd, GRAB_TIMER, GetDoubleClickTime(), NULL);
+            SetTimer(g_timerhwnd, GRAB_TIMER, conf.LongClickMoveDelay, NULL);
         } else {
             // Cancel Grab timer.
             KillTimer(g_timerhwnd, GRAB_TIMER);
@@ -5970,6 +6098,9 @@ __declspec(dllexport) HWND WINAPI Load(HWND mainhwnd)
     conf.BLCapButtons  = GetSectionOptionInt(inisection, "BLCapButtons", 3);
     conf.BLUpperBorder = GetSectionOptionInt(inisection, "BLUpperBorder", 3);
     conf.AeroMaxSpeed  = GetSectionOptionInt(inisection, "AeroMaxSpeed", 65535);
+    conf.LongClickMoveDelay = GetSectionOptionInt(inisection, "LongClickMoveDelay", 0);
+    if (conf.LongClickMoveDelay == 0)
+        conf.LongClickMoveDelay = GetDoubleClickTime();
 
     GetPrivateProfileSection(TEXT("Performance"), inisection, ARR_SZ(inisection), inipath);
     readalluchars(&conf.FullWin, inisection, Performance_uchars, ARR_SZ(Performance_uchars));
