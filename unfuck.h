@@ -276,17 +276,21 @@ static size_t lstrcatM_s(TCHAR *d, size_t dl, ...)
     return dl; /* Remaining TCHARs */
 }
 
-static int PrintHwndDetails(HWND hwnd, TCHAR *buf)
+static int PrintHwndDetails(HWND hwnd, TCHAR buf[AT_LEAST 512+40+2*8+4*12+1])
 {
-    TCHAR klass[256], title[256];
+    TCHAR klass[256]=TEXT(""), title[256]=TEXT("");
+    RECT rc;
+    GetWindowRect(hwnd, &rc);
     GetClassName(hwnd, klass, ARR_SZ(klass));
     GetWindowText(hwnd, title, ARR_SZ(title));
     return wsprintf(buf
-        , TEXT("Hwnd=%x, %s|%s, style=%x, xstyle=%x")
+        , TEXT("Hwnd=%x, %s|%s, style=%x, xstyle=%x, rect=%ld,%ld,%ld,%ld")
         , (UINT)(UINT_PTR)hwnd
         , title, klass
         , (UINT)GetWindowLongPtr(hwnd, GWL_STYLE)
-        , (UINT)GetWindowLongPtr(hwnd, GWL_EXSTYLE));
+        , (UINT)GetWindowLongPtr(hwnd, GWL_EXSTYLE)
+        , rc.left, rc.top, rc.right, rc.bottom
+        );
 }
 
 /* Helper to be able to enable/disable dialog items
@@ -439,12 +443,6 @@ static HWND GetAncestorL(HWND hwnd, UINT gaFlags)
     #undef FUNK_TYPE
 }
 
-/*BOOL ChangeWindowMessageFilterEx(
-  [in]                HWND                hwnd,
-  [in]                UINT                message,
-  [in]                DWORD               action,
-  [in, out, optional] PCHANGEFILTERSTRUCT pChangeFilterStruct
-);*/
 #ifndef MSGFLTINFO_NONE
 
 #define MSGFLTINFO_NONE 0
@@ -458,6 +456,23 @@ typedef struct tagCHANGEFILTERSTRUCT {
 } CHANGEFILTERSTRUCT, *PCHANGEFILTERSTRUCT;
 #endif
 
+// On Windows Vista we have to use this one that applies process wide.
+static BOOL ChangeWindowMessageFilterL(UINT msg, DWORD ac)
+{
+    #define FUNK_TYPE ( BOOL (WINAPI *)(UINT msg, DWORD ac) )
+    static BOOL (WINAPI *funk)(UINT msg, DWORD ac) = FUNK_TYPE IPTR;
+
+    if (funk == FUNK_TYPE IPTR) {
+        funk = FUNK_TYPE LoadDLLProc("USER32.DLL", "ChangeWindowMessageFilter");
+    }
+    if (funk) { /* We know we have the function */
+        return funk(msg, ac);
+    }
+    return FALSE;
+    #undef FUNK_TYPE
+}
+
+// Available only on Windows 7+s
 static BOOL ChangeWindowMessageFilterExL(HWND hwnd, UINT msg, DWORD ac, PCHANGEFILTERSTRUCT pC)
 {
     #define FUNK_TYPE ( BOOL (WINAPI *)(HWND hwnd, UINT msg, DWORD ac, PCHANGEFILTERSTRUCT pC) )
@@ -469,7 +484,8 @@ static BOOL ChangeWindowMessageFilterExL(HWND hwnd, UINT msg, DWORD ac, PCHANGEF
     if (funk) { /* We know we have the function */
         return funk(hwnd, msg, ac, pC);
     }
-    return FALSE;
+    // Process-wide Fallback for Windows Vista!
+    return ChangeWindowMessageFilterL(msg, ac);
     #undef FUNK_TYPE
 }
 
@@ -931,6 +947,7 @@ static void FixDWMRectLL(HWND hwnd, RECT *bbb, const int SnapGap)
         /*SetRect(bbb, 10, 10, 10, 10);*/
     }
     if (SnapGap) OffsetRect(bbb, -SnapGap, -SnapGap);
+//    if (IsZoomed(hwnd)) OffsetRect(bbb, 10, 10); // Test for Zoomed stuff
 }
 
 /* This function is here because under Windows 10, the GetWindowRect function

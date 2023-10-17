@@ -452,6 +452,9 @@ int WINAPI tWinMain(HINSTANCE hInst, HINSTANCE hPrevInstance, TCHAR *params, int
             TEXT("-q\tQuiet mode\n")
             TEXT("-m\tMultiple instances allowed\n")
             TEXT("-c\tOpen Config dialog\n")
+            TEXT("-e\tElevate AltSnap\n")
+            TEXT("-r\tRelaod AltSnap settings\n")
+            TEXT("-lX\tSelect Snap Layout number X\n")
             TEXT("-afX\tExecute action X for the foreground window\n")
             TEXT("-apX\tExecute action X for the pointed window\n");
 
@@ -464,6 +467,7 @@ int WINAPI tWinMain(HINSTANCE hInst, HINSTANCE hPrevInstance, TCHAR *params, int
     int elevate = !!lstrstr(params, TEXT("-e"));
     int multi   = !!lstrstr(params, TEXT("-m"));
     int config  = !!lstrstr(params, TEXT("-c"));
+    int rlini   = !!lstrstr(params, TEXT("-r"));
 
     // Check if elevated if in >= WinVer
     WinVer = LOBYTE(LOWORD(GetVersion()));
@@ -500,10 +504,23 @@ int WINAPI tWinMain(HINSTANCE hInst, HINSTANCE hPrevInstance, TCHAR *params, int
                     return 0;
                 }
             }
+            // Change layout if asked...
+            #define isUDigit(x) ( TEXT('0') <= (x) && (x) <= TEXT('9') )
+            const TCHAR *layout = lstrstr(params, TEXT("-l"));
+            if (layout && isUDigit(layout[2])) {
+                TCHAR numstr[3] = { layout[2], layout[3], TEXT('\0') };
+                if (!isUDigit(numstr[1]))
+                    numstr[1] = TEXT('\0');
+                //MessageBox(NULL, NULL, NULL, 0);
+                int layoutnumber = CLAMP(0, strtoi(numstr)-1, 9);
+                PostMessage(previnst, WM_COMMAND, SWM_SNAPLAYOUT+layoutnumber, 0);
+                return 0;
+            }
             // Update old instance if no action to be made.
             LOG("Previous instance found and no -multi mode");
             if(hide)   PostMessage(previnst, WM_CLOSECONFIG, 0, 0);
             if(config) PostMessage(previnst, WM_OPENCONFIG, 0, 0);
+            if(rlini)  PostMessage(previnst, WM_UPDATESETTINGS, 0, 0);
             PostMessage(previnst, hide? WM_HIDETRAY : WM_ADDTRAY, 0, 0);
             LOG("Updated old instance and NORMAL EXIT");
             return 0;
@@ -543,6 +560,14 @@ int WINAPI tWinMain(HINSTANCE hInst, HINSTANCE hPrevInstance, TCHAR *params, int
                             , wnd.lpszClassName , NULL , WS_POPUP
                             , 0, 0, 0, 0, NULL, NULL, hInst, NULL);
     LOG("Create main APP Window: %s", g_hwnd? "Sucess": "Failed");
+    if (elevated) {
+        // AltSnap was started elevated!
+        // Allow some messages to be sent from non-elevated instance
+        // so that user can do AltSnap.exe -c/r/h/l
+        UINT i;
+        for (i = WM_UPDATETRAY; i <= WM_HIDETRAY; i++)
+            ChangeWindowMessageFilterExL(g_hwnd, i, /*MSGFLT_ALLOW*/1, NULL);
+    }
     // Tray icon
 
     InitTray();
