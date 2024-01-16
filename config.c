@@ -152,7 +152,7 @@ static void OpenConfig(int startpage)
     psh.hIcon = icons[1]; //LoadIcon(g_hinst, iconstr[1]);
     psh.pszCaption = TEXT(APP_NAMEA);
     psh.nPages = ARR_SZ(pages);
-    psh.ppsp = (LPCPROPSHEETPAGE) &psp;
+    psh.ppsp = psp;
     psh.pfnCallback = PropSheetProc;
     psh.nStartPage = startpage;
 
@@ -300,6 +300,7 @@ static DWORD IsUACEnabled()
 #define CB_GetCurSel(hwnd) (int)(DWORD)SendMessage(hwnd, CB_GETCURSEL, 0, 0)
 static int CB_GetCurSelDlgItem(HWND hwnd, UINT id) { return (int)(DWORD)SendMessage(GetDlgItem(hwnd, id), CB_GETCURSEL, 0, 0); }
 #define CB_GetCurSelId(id) CB_GetCurSelDlgItem(hwnd, id)
+#define CB_GetText(id, txt, txtlen) (int)(DWORD)SendMessage(GetDlgItem(hwnd, id), WM_GETTEXT, (WPARAM)txtlen, (LPARAM)txt)
 static void WriteOptionBoolW(HWND hwnd, WORD id, const TCHAR *section, const char *name_s)
 {
     TCHAR name[64];
@@ -781,10 +782,23 @@ static void FillActionDropListS(HWND hwnd, int idc, TCHAR *inioption, const stru
 }
 static void WriteActionDropListS(HWND hwnd, int idc, TCHAR *inioption, const struct actiondl *actions)
 {
-    // HWND control = GetDlgItem(hwnd, idc);
-    int j = CB_GetCurSelId(idc);
-    if (j >= 0 && actions[j].action) // Inside of known values
+    HWND control = GetDlgItem(hwnd, idc);
+    int j = SendMessage(control, CB_GETCURSEL, 0, 0);
+    if (j >= 0 && actions[j].action) { // Inside of known values
         WritePrivateProfileString(TEXT("Input"), inioption, actions[j].action, inipath);
+        return; // DONE!
+    }
+
+    // User directly Wrote the specified string?
+    TCHAR txt[128]=TEXT("");
+    if (0 < (int)(DWORD)SendMessage(control, WM_GETTEXT, ARR_SZ(txt), (LPARAM)txt) && *txt ) {
+        // Action was direcly written!
+        j = SendMessage(control, CB_FINDSTRINGEXACT, /*start index=*/-1, (LPARAM)txt);
+        if( j>=0 ) // Found index.
+            WritePrivateProfileString(TEXT("Input"), inioption, actions[j].action, inipath);
+        else
+            WritePrivateProfileString(TEXT("Input"), inioption, txt, inipath);
+    }
 }
 /////////////////////////////////////////////////////////////////////////////
 INT_PTR CALLBACK MousePageDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -904,7 +918,7 @@ INT_PTR CALLBACK MousePageDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         { IDC_TTBACTIONSWA,  T_BMK, 1, TEXT("Input"), "TTBActions", 0    },
         { IDC_LONGCLICKMOVE, T_BOL, 0, TEXT("Input"), "LongClickMove", 0 }
     };
-    
+
     LPNMHDR pnmh = (LPNMHDR) lParam;
 
 
@@ -921,7 +935,7 @@ INT_PTR CALLBACK MousePageDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             goto FILLACTIONS;
         }
 
-        if (event == 0 || event == CBN_SELCHANGE){
+        if (event == 0 || event == CBN_SELCHANGE || event == CBN_EDITCHANGE){
             PropSheet_Changed(g_cfgwnd, hwnd);
             have_to_apply = 1;
         }
@@ -1120,7 +1134,7 @@ INT_PTR CALLBACK KeyboardPageDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         {TEXT("Nothing"),     L10NIDX(input_actions_nothing) },
         {NULL, 0}
     };
-    struct actiondl kbshortcut_actions[] = {
+    static const struct actiondl kbshortcut_actions[] = {
         {TEXT("Kill"),        L10NIDX(input_actions_kill) },
         {TEXT("Pause"),       L10NIDX(input_actions_pause) },
         {TEXT("Resume"),      L10NIDX(input_actions_resume) },
@@ -1179,10 +1193,7 @@ INT_PTR CALLBACK KeyboardPageDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
     };
 
     // Hotkeys
-    static const struct {
-        TCHAR *action;
-        short lidx;
-    } togglekeys[] = {
+    static const struct actiondl togglekeys[] = {
         {TEXT(""),      L10NIDX(input_actions_nothing)},
         {TEXT("A4 A5"), L10NIDX(input_hotkeys_alt)},
         {TEXT("5B 5C"), L10NIDX(input_hotkeys_winkey)},
@@ -1196,6 +1207,7 @@ INT_PTR CALLBACK KeyboardPageDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         {TEXT("A3"),    L10NIDX(input_hotkeys_rightctrl)},
         {TEXT("A0"),    L10NIDX(input_hotkeys_leftshift)},
         {TEXT("A1"),    L10NIDX(input_hotkeys_rightshift)},
+        {NULL, 0},
     };
     static const struct optlst optlst[] = {
         { IDC_SCROLLLOCKSTATE,  T_BMK, 0, TEXT("Input"), "ScrollLockState", 0},
@@ -1203,9 +1215,9 @@ INT_PTR CALLBACK KeyboardPageDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         { IDC_KEYCOMBO,         T_BOL, 0, TEXT("Input"), "KeyCombo", 0 },
         { IDC_USEPTWINDOW,      T_BOL, 0, TEXT("KBShortcuts"), "UsePtWindow", 0},
     };
-    
+
     LPNMHDR pnmh = (LPNMHDR) lParam;
-    
+
     if (msg == WM_INITDIALOG) {
         edit_shortcut_idx = 0;
         ReadDialogOptions(hwnd, optlst, ARR_SZ(optlst));
@@ -1232,8 +1244,9 @@ INT_PTR CALLBACK KeyboardPageDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             SetDlgItemText(hwnd, IDC_SHORTCUTS, keyname);
 
             EnableDlgItem(hwnd, IDC_SHORTCUTS_SET, 1);
-        } else if ((event == 0 || event == EN_UPDATE || event == CBN_SELCHANGE)
-            && (IDC_SHORTCUTS > id || id > IDC_SHORTCUTS_CLEAR)) {
+        } else if (event == CBN_EDITCHANGE
+            || ((event == 0 || event == EN_UPDATE || event == CBN_SELCHANGE)
+               && (IDC_SHORTCUTS > id || id > IDC_SHORTCUTS_CLEAR))) {
             PropSheet_Changed(g_cfgwnd, hwnd);
             have_to_apply = 1;
         }
@@ -1335,9 +1348,9 @@ INT_PTR CALLBACK KeyboardPageDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             HWND control = GetDlgItem(hwnd, IDC_MODKEY);
             CB_ResetContent(control);
             unsigned j, sel = 0;
-            for (j = 0; j < ARR_SZ(togglekeys); j++) {
+            for (j = 0; j < ARR_SZ(togglekeys)-1; j++) {
                 TCHAR key_name[256];
-                lstrcpy_noaccel(key_name, L10NSTR(togglekeys[j].lidx), ARR_SZ(key_name));
+                lstrcpy_noaccel(key_name, L10NSTR(togglekeys[j].l10nidx), ARR_SZ(key_name));
                 CB_AddString(control, key_name);
                 if (!lstrcmp(txt, togglekeys[j].action)) {
                     sel = j;
@@ -1346,7 +1359,7 @@ INT_PTR CALLBACK KeyboardPageDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             // Add the current ModKey string to the list if not found!
             if (sel == 0 && txt[0]) {
                 CB_AddString(control, &txt[0]);
-                sel = ARR_SZ(togglekeys);
+                sel = ARR_SZ(togglekeys)-1;
             }
             CB_SetCurSel(control, sel); // select current ModKey
 
@@ -1382,17 +1395,15 @@ INT_PTR CALLBACK KeyboardPageDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
 
         } else if (pnmh->code == PSN_APPLY && have_to_apply ) {
             APPLY_ALL:;
-            int i;
+//            int i;
             // Action without click
             WriteActionDropListS(hwnd, IDC_GRABWITHALT, TEXT("GrabWithAlt"), kb_actions);
             WriteActionDropListS(hwnd, IDC_GRABWITHALTB, TEXT("GrabWithAltB"), kb_actions);
 
             WriteDialogOptions(hwnd, optlst, ARR_SZ(optlst));
             ScrollLockState = WriteOptionBoolB(IDC_SCROLLLOCKSTATE, TEXT("Input"), "ScrollLockState", 0);
-            // Modifier key
-            i = CB_GetCurSelId(IDC_MODKEY);
-            if(i < (int)ARR_SZ(togglekeys))
-                WritePrivateProfileString(TEXT("Input"), TEXT("ModKey"), togglekeys[i].action, inipath);
+            // Modifier key (similar to action list)
+            WriteActionDropListS(hwnd, IDC_MODKEY, TEXT("ModKey"), togglekeys);
             // Hotkeys
             SaveHotKeys(hotkeys, hwnd, TEXT("Hotkeys"));
             WriteOptionBool(IDC_KEYCOMBO,  TEXT("Input"), "KeyCombo");
@@ -1491,13 +1502,20 @@ INT_PTR CALLBACK BlacklistPageDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 /////////////////////////////////////////////////////////////////////////////
 LRESULT CALLBACK FindWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    if (msg == WM_LBUTTONDOWN || msg == WM_MBUTTONDOWN || msg == WM_RBUTTONDOWN) {
-        ShowWindow(hwnd, SW_HIDE);
+    if (msg == WM_LBUTTONUP || msg == WM_MBUTTONUP || msg == WM_RBUTTONUP) {
+        DWORD msgpos = GetMessagePos();
+        POINT pt = { GET_X_LPARAM(msgpos), GET_Y_LPARAM(msgpos) };
+        RECT fwRc;
         HWND page = PropSheet_GetCurrentPageHwnd(g_cfgwnd);
+        HWND findHwnd = GetDlgItem(page, IDC_FINDWINDOW);
+        GetWindowRect(findHwnd, &fwRc);
+        if (PtInRect(&fwRc, pt))
+            return 0;
 
-        if (msg == WM_LBUTTONDOWN) {
-            POINT pt;
-            GetCursorPos(&pt);
+       ShowWindow(hwnd, SW_HIDE);
+       if (msg == WM_LBUTTONUP) {
+//            POINT pt;
+//            GetCursorPos(&pt);
             HWND nwindow = WindowFromPoint(pt);
             HWND window = GetAncestor(nwindow, GA_ROOT);
 
@@ -1542,7 +1560,7 @@ LRESULT CALLBACK FindWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             SetDlgItemText(page, IDC_WINHANDLES, txt);
         }
         // Show icon again
-        ShowWindowAsync(GetDlgItem(page, IDC_FINDWINDOW), SW_SHOW);
+        ShowWindowAsync(findHwnd, SW_SHOW);
 
         DestroyWindow(hwnd);
         UnregisterClass(TEXT(APP_NAMEA)TEXT("-find"), g_hinst);
@@ -1737,10 +1755,10 @@ LRESULT CALLBACK TestWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         const HBRUSH bgbrush =    uDarkMode? CreateSolidBrush(RGB(32, 32, 32)): (HBRUSH)(COLOR_BTNFACE+1);
         const HPEN pen = (HPEN) CreatePen(PS_SOLID, penwidth, txtcolor);
 
-        struct lastkeyss *lks = (struct lastkeyss *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+        const struct lastkeyss *lks = (struct lastkeyss *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
         if (!lks) break;
         int idx = lks->idx;
-        TCHAR (*lastkey)[MAXLL] = lks->lastkey;
+        const TCHAR (*lastkey)[MAXLL] = lks->lastkey;
 
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);

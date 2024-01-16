@@ -3,7 +3,13 @@
 
 #include <windows.h>
 
-#define AT_LEAST static
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L && !defined(__WATCOMC__)
+	// C99+ mode but not buggy watcom C99
+	#define AT_LEAST static
+#else
+	#define AT_LEAST
+#endif
+
 #ifdef __GNUC__
 #define flatten __attribute__((flatten))
 #define xpure __attribute__((const))
@@ -659,11 +665,15 @@ static inline unsigned h2u(const TCHAR c)
     else return 0;
 }
 
-/* stops at the end of the string or at a space*/
+static pure int IsSeparator(TCHAR c)
+{
+    return c <= '0';
+}
+/* stops at the end of the string or at a any char before '0' */
 static allnonnull pure unsigned lstrhex2u(const TCHAR *s)
 {
     unsigned ret=0;
-    while(*s && *s != L' ')
+    while(*s >= '0')
        ret = ret << 4 | h2u(*s++) ;
 
     return ret;
